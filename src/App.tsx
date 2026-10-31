@@ -19,6 +19,47 @@ type Segment = {
   text: string;
 };
 
+type EditingSegment = {
+  id: number;
+  start: string;
+  end: string;
+  text: string;
+};
+
+function formatTime(time: number) {
+  const totalSeconds = Math.max(0, Math.round(time));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  return [hours, minutes, seconds]
+    .map((unit) => String(unit).padStart(2, "0"))
+    .join(":");
+}
+
+function parseTime(value: string): number | null {
+  const values = value.trim().split(":");
+
+  if (
+    values.length > 3 ||
+    values.some((part) => !/^\d+$/.test(part))
+  ) {
+    return null;
+  }
+
+  const numbers = values.map(Number);
+  const [hours, minutes, seconds] =
+    numbers.length === 3
+      ? numbers
+      : numbers.length === 2
+        ? [0, ...numbers]
+        : [0, 0, numbers[0]];
+
+  if (minutes > 59 || seconds > 59) return null;
+
+  return hours * 3600 + minutes * 60 + seconds;
+}
+
 function App() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -40,6 +81,7 @@ function App() {
   const [updatingSegmentId, setUpdatingSegmentId] = useState<number | null>(null);
   const [deletingSegmentId, setDeletingSegmentId] = useState<number | null>(null);
   const [isLoadingSegments, setIsLoadingSegments] = useState(true);
+  const [editingSegment, setEditingSegment] = useState<EditingSegment | null>(null);
 
   const [text,setText] = useState("");
   const [segments,setSegments] = useState<Segment[]>([]);
@@ -94,53 +136,59 @@ function App() {
     setText("");
   }
 
-  function updateSegmentTime(
-    id: number,
-    field: "start" | "end",
-    value: number
-  ) {
-    if (!Number.isFinite(value)) return;
-
-    const time = Math.max(0, Math.min(value, duration));
-
-    setSegments((existingSegments) =>
-      existingSegments.map((segment) => {
-        if (segment.id !== id) return segment;
-
-        if (field === "start") {
-          return {
-            ...segment,
-            start: Math.min(time, segment.end),
-          };
-        }
-
-        return {
-          ...segment,
-          end: Math.max(time, segment.start),
-        };
-      })
-    );
+  function handleStartEditing(segment: Segment) {
+    setEditingSegment({
+      id: segment.id,
+      start: formatTime(segment.start),
+      end: formatTime(segment.end),
+      text: segment.text,
+    });
+    setError("");
   }
 
-  async function handleUpdateSegment(id: number) {
-    const segment = segments.find((savedSegment) => savedSegment.id === id);
-    if (!segment) return;
+  async function handleUpdateSegment() {
+    if (!editingSegment) return;
 
-    setUpdatingSegmentId(id);
+    const start = parseTime(editingSegment.start);
+    const end = parseTime(editingSegment.end);
+
+    if (start === null || end === null) {
+      setError("Use HH:MM:SS format, for example 00:01:30.");
+      return;
+    }
+
+    if (end < start) {
+      setError("The end time must be after the start time.");
+      return;
+    }
+
+    if (duration > 0 && end > duration) {
+      setError("The end time cannot be longer than the uploaded video.");
+      return;
+    }
+
+    if (!editingSegment.text.trim()) {
+      setError("Text cannot be empty.");
+      return;
+    }
+
+    setUpdatingSegmentId(editingSegment.id);
     setError("");
 
     try {
       const updatedTimestamp = await updateTimestamp(
-        segment.id,
-        segment.start,
-        segment.end,
+        editingSegment.id,
+        start,
+        end,
+        editingSegment.text.trim(),
       );
 
       setSegments((existingSegments) =>
         existingSegments.map((savedSegment) =>
-          savedSegment.id === id ? updatedTimestamp : savedSegment,
+          savedSegment.id === editingSegment.id ? updatedTimestamp : savedSegment,
         ),
       );
+      setEditingSegment(null);
     } catch (updateError) {
       setError(
         updateError instanceof Error
@@ -423,13 +471,6 @@ function App() {
     rangeAtDragStart.current = null;
   }
 
-  function formatTime(time: number) {
-    const minutes = Math.floor(time / 60);
-    const seconds = Math.floor(time % 60);
-
-    return `${minutes}:${String(seconds).padStart(2, "0")}`;
-  }
-
   return (
     <div className="min-h-screen bg-slate-950 text-white p-6">
       <div className="max-w-4xl mx-auto space-y-6">
@@ -587,68 +628,87 @@ function App() {
                     key={segment.id}
                     className="flex flex-col gap-3 rounded-lg border border-slate-700 bg-slate-800/70 p-3 sm:flex-row sm:items-center sm:justify-between"
                   >
-                    <p className="break-words font-medium">{segment.text}</p>
-                    <div className="flex flex-wrap items-center gap-2 text-sm text-slate-300">
-                      <label className="flex items-center gap-2">
-                        <span>Start</span>
-                        <input
-                          type="number"
-                          min={0}
-                          max={duration || undefined}
-                          step={0.1}
-                          value={segment.start}
-                          onChange={(e) =>
-                            updateSegmentTime(
-                              segment.id,
-                              "start",
-                              e.currentTarget.valueAsNumber
-                            )
-                          }
-                          className="w-24 rounded-md border border-slate-600 bg-slate-900 px-2 py-1 text-white"
-                          aria-label={`Start time for ${segment.text}`}
-                        />
-                      </label>
-                      <label className="flex items-center gap-2">
-                        <span>End</span>
-                        <input
-                          type="number"
-                          min={0}
-                          max={duration || undefined}
-                          step={0.1}
-                          value={segment.end}
-                          onChange={(e) =>
-                            updateSegmentTime(
-                              segment.id,
-                              "end",
-                              e.currentTarget.valueAsNumber
-                            )
-                          }
-                          className="w-24 rounded-md border border-slate-600 bg-slate-900 px-2 py-1 text-white"
-                          aria-label={`End time for ${segment.text}`}
-                        />
-                      </label>
-                      <span className="text-xs text-slate-400">
-                        {formatTime(segment.start)} - {formatTime(segment.end)}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => handleUpdateSegment(segment.id)}
-                        disabled={updatingSegmentId === segment.id}
-                        className="rounded-md bg-blue-600 px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {updatingSegmentId === segment.id
-                          ? "Updating..."
-                          : "Save changes"}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteSegment(segment.id)}
-                        disabled={deletingSegmentId === segment.id}
-                        className="rounded-md border border-red-800 px-3 py-1 text-xs font-medium text-red-300 transition-colors hover:bg-red-950 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {deletingSegmentId === segment.id ? "Deleting..." : "Delete"}
-                      </button>
-                    </div>
+                    {editingSegment?.id === segment.id ? (
+                      <div className="w-full space-y-3">
+                        <label className="block text-sm text-slate-300">
+                          Text
+                          <input
+                            type="text"
+                            value={editingSegment.text}
+                            onChange={(e) => setEditingSegment({ ...editingSegment, text: e.target.value })}
+                            className="mt-1 w-full rounded-md border border-slate-600 bg-slate-900 px-2 py-1.5 text-white"
+                          />
+                        </label>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <label className="text-sm text-slate-300">
+                            Start time (HH:MM:SS)
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              value={editingSegment.start}
+                              onChange={(e) => setEditingSegment({ ...editingSegment, start: e.target.value })}
+                              className="mt-1 w-full rounded-md border border-slate-600 bg-slate-900 px-2 py-1.5 text-white"
+                              placeholder="00:00:00"
+                            />
+                          </label>
+                          <label className="text-sm text-slate-300">
+                            End time (HH:MM:SS)
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              value={editingSegment.end}
+                              onChange={(e) => setEditingSegment({ ...editingSegment, end: e.target.value })}
+                              className="mt-1 w-full rounded-md border border-slate-600 bg-slate-900 px-2 py-1.5 text-white"
+                              placeholder="00:00:00"
+                            />
+                          </label>
+                        </div>
+                        <p className="text-xs text-slate-400">Use HH:MM:SS, for example 00:01:30.</p>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={handleUpdateSegment}
+                            disabled={updatingSegmentId === segment.id}
+                            className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {updatingSegmentId === segment.id ? "Saving..." : "Save changes"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditingSegment(null)}
+                            className="rounded-md border border-slate-600 px-3 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-700"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="min-w-0 flex-1">
+                          <p className="break-words font-medium">{segment.text}</p>
+                          <p className="mt-1 text-xs text-slate-400">
+                            {formatTime(segment.start)} - {formatTime(segment.end)}
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleStartEditing(segment)}
+                            className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-blue-700"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteSegment(segment.id)}
+                            disabled={deletingSegmentId === segment.id}
+                            className="rounded-md border border-red-800 px-3 py-1.5 text-xs font-medium text-red-300 transition-colors hover:bg-red-950 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {deletingSegmentId === segment.id ? "Deleting..." : "Delete"}
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </li>
                 ))}
               </ul>

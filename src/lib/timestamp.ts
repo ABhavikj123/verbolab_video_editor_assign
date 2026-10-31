@@ -33,7 +33,6 @@ function toSavedTimestamp(row: {
   };
 }
 
-/** Load every saved caption range for this single-video assignment. */
 export async function getTimestamps(): Promise<SavedTimestamp[]> {
   const { data, error } = await getSupabaseClient()
     .from(tableName)
@@ -45,14 +44,11 @@ export async function getTimestamps(): Promise<SavedTimestamp[]> {
   return data.map(toSavedTimestamp);
 }
 
-/** Save a caption range in the textTimestamp table. */
 export async function saveTimestamp(
   start: number,
   end: number,
   text: string,
 ): Promise<SavedTimestamp> {
-  // The SQL in the assignment creates unquoted PostgreSQL identifiers, which
-  // PostgreSQL stores in lowercase (texttimestamp, starttime, endtime, inputtext).
   const { data, error } = await getSupabaseClient()
     .from(tableName)
     .insert({
@@ -68,17 +64,18 @@ export async function saveTimestamp(
   return toSavedTimestamp(data);
 }
 
-/** Update an existing caption range after its start or end time is edited. */
 export async function updateTimestamp(
   id: number,
   start: number,
   end: number,
+  text: string,
 ): Promise<SavedTimestamp> {
   const { data, error } = await getSupabaseClient()
     .from(tableName)
     .update({
       starttime: Math.round(start),
       endtime: Math.round(end),
+      inputtext: text,
     })
     .eq("id", id)
     .select("id, starttime, endtime, inputtext")
@@ -89,7 +86,6 @@ export async function updateTimestamp(
   return toSavedTimestamp(data);
 }
 
-/** Remove a caption range from the database. */
 export async function deleteTimestamp(id: number): Promise<void> {
   const { error } = await getSupabaseClient()
     .from(tableName)
